@@ -76,6 +76,93 @@ class Logbook extends CI_Controller {
 
 	}
 
+	function fix_gridsquare($action = "update") {
+		// Check if users logged in
+		$this->load->model('user_model');
+		if ($this->user_model->validate_session() == 0) {
+			// user is not logged in
+			redirect('user/login');
+		}
+		$this->load->model('stations');
+
+		$this->db->from($this->config->item('table_name'));
+		$this->db->where('COL_GRIDSQUARE', '');
+
+		$this->db->order_by('' . $this->config->item('table_name') . '.COL_TIME_ON', "desc");
+
+		$data['results'] = $this->db->get();
+
+		if ($action != "show") {
+			$this->load->library('qrz');
+			$this->load->library('sota');
+
+			if (!$this->session->userdata('qrz_session_key')) {
+				$qrz_session_key = $this->qrz->session($this->config->item('qrz_username'), $this->config->item('qrz_password'));
+				$this->session->set_userdata('qrz_session_key', $qrz_session_key);
+			}
+
+			$updated = 0;
+			foreach ($data['results']->result() as $row) {
+				$locator = '';
+
+				if ($row->COL_SOTA_REF != '') {
+					$json = $this->sota->info($row->COL_SOTA_REF);
+					$summit = json_decode($json);
+
+					if (empty($summit->locator))
+						continue;
+
+					$locator = $summit->locator;
+					$new_qth = $summit->name;
+				} elseif ($row->COL_SIG != '')
+					continue;
+				elseif ($row->COL_SIG_INFO != '')
+					continue;
+
+				elseif (empty($locator)) {
+					$qrz_data = $this->qrz->search($row->COL_CALL, $this->session->userdata('qrz_session_key'), $this->config->item('use_fullname'));
+
+					if (empty($qrz_data['callsign'])) {
+						$qrz_session_key = $this->qrz->session($this->config->item('qrz_username'), $this->config->item('qrz_password'));
+						$this->session->set_userdata('qrz_session_key', $qrz_session_key);
+						$qrz_data = $this->qrz->search($row->COL_CALL, $this->session->userdata('qrz_session_key'), $this->config->item('use_fullname'));
+					}
+					if (empty($qrz_data['gridsquare'])) {
+						continue;
+					}
+
+					$locator = $qrz_data['gridsquare'];
+				} else {
+					continue;
+				}
+
+				$this->db->reset_query();
+				$this->db->where('COL_GRIDSQUARE', '');
+				$this->db->where('COL_SOTA_REF', $row->COL_SOTA_REF);
+				$this->db->where('COL_SIG', '');
+				$this->db->where('COL_SIG_INFO', '');
+				$this->db->where('COL_CALL', $row->COL_CALL);
+
+				$this->db->update($this->config->item('table_name'), array(
+					'COL_GRIDSQUARE' => $locator,
+					'COL_QTH' => $new_qth ?? $row->COL_QTH,
+				));
+				$updated += 1;
+
+				if ($updated > 5)
+					break;
+			}
+
+			redirect("logbook/fix_gridsquare/show");
+		}
+		
+		//load the model and get results
+		if (!$data['results']) {
+			$this->session->set_flashdata('notice', $this->lang->line('error_no_logbook_found') . ' <a href="' . site_url('logbooks') . '" title="Station Logbooks">Station Logbooks</a>');
+		}
+		$this->load->view('view_log/fix_gridsquare', $data);
+	}
+
 	function jsonentity($adif) {
         $this->load->model('user_model');
         if(!$this->user_model->authorize($this->config->item('auth_mode'))) { return; }
